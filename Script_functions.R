@@ -6,7 +6,7 @@ tissue.cols <- setNames(c("#F9C961","#faae65", "#c89721", "#8f6c19", "#227539", 
                         c("Lung-tracheal-epi","Lung-airway-trachea", "Lung-airway", "Lung-distal", "Esophagus", "Stomach-corpus", "Stomach-antrum",
                           "Duodenum", "Jejunum", "Ileum", "Colon", "Proximal-small-intestine", "Small-intestine", "Stomach"))
 major.ct.cols <- setNames(c("#f59eb5", "#cb6778", "#4cab99",  "#b98fc1",  "#3e7bb7", "#d9d9d9"), 
-                          c("Neural", "Epithelial", "Mesenchymal", "Endothelial", "Immune", "Undefined"))
+                          c("Neural", "Epithelial", "Mesenchymal", "Endothelial", "Immune", "Doublet"))
 darkBlue2Orange <- colorRampPalette(c("#2E4053", "#85929E", "#D6DBDF", "#F6DDCC", "#E59866", "#BA4A00"))(30)
 blue2Red <- colorRampPalette(c("#0571b0","#92c5de", "#f7f7f7", "#f4a582", "#ca0020"))(50)
 white2black <- colorRampPalette(c("#f0f0f0", "#252525"))(50)
@@ -56,7 +56,7 @@ e.n.ct.cols <- setNames(c("#f9e79f", "#a9dfbf", "#4daa99",
                           "KRT4+ basal type 1",                      "WNT6+ basal",              
                           "ADIRF+",                    "Immune",                    "Neuroendocrine",           
                           "Stomach-secretory-like 1",  "APOA4+",                    "APOH+"))
-
+species.cols <- setNames(c("#5b4f9f","#9d1b45"), c("Chimp","Human"))
 
 #' Plot feature's gradients/classes across all samples (cells) given the plotting coordinates
 #'
@@ -104,7 +104,7 @@ plotFeature2 <- function(coor, values, label.only=FALSE, point.order= NULL, knn.
     }
   }else{
     if(is.null(gCols)){
-        gCols <- setNames(colorRampPalette(prettyrainbow)(length(unique(values))), unique(values))
+        gCols <- setNames(colorRampPalette(prettyrainbow)(length(unique(values))), sort(unique(values)))
     }
     cellColor <- gCols[values]
   }
@@ -1660,18 +1660,28 @@ getClusterMarkers <- function(seu.obj, assay.type="RNA", data.type="data", featu
   return(cm.res)
 }
 
-getExprByPt <- function(pt.vec, expr.mat, cell.num.per.bin=50){
+getExprByPt <- function(pt.vec, expr.mat, cell.num.per.bin=50, return.idx=FALSE){
   start.idx <- seq(from=1, to=length(pt.vec), by=cell.num.per.bin)
   end.idx <- c(start.idx[-1]-1,length(pt.vec))
+  dif <- end.idx[length(end.idx)] - start.idx[length(start.idx)] + 1
+  if(dif<cell.num.per.bin*0.25){
+    start.idx <- start.idx[-length(start.idx)]
+    end.idx <- end.idx[-length(end.idx)]
+    end.idx[length(end.idx)] <- length(pt.vec)
+  }
   idx <- cbind(start.idx, end.idx)
   pt.rank <- rank(pt.vec, ties.method = "first")
   expr.by.pt.g <- sapply(seq(nrow(idx)), function(i){
     idx.start <- idx[i,1]
     idx.end <- idx[i,2]
     idx.cell <- which(pt.rank>=idx.start & pt.rank<=idx.end)
-    apply(expr.mat[,idx.cell], 1, mean)
+    rowMeans(expr.mat[,idx.cell])
   })
-  return(expr.by.pt.g)
+  if(!return.idx){
+    return(expr.by.pt.g)
+  }else{
+    res <- list("expr.mat"=expr.by.pt.g, "idx.mat"=idx)
+  }
 }
 
 getMostFrequentGroupByPt <- function(pt.vec=pt.vec, group.vec=age.vec, cell.num.per.bin=50){
