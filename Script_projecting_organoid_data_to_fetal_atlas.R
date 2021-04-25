@@ -1,20 +1,25 @@
 library(Seurat)
+library(uwot)
 source("Script_functions.R")
 
 # load fetal data
-## load processed fetal atlas seurat object, which has the CSS-based UMAP embedding of the fetal atlas
-fetal <- readRDS("Res_all_fetal_cells_combined_no_MT_Ribo_Sex_genes_CSS.rds")
+## Please get the fetal reference data from our Mendeley data repository at http://dx.doi.org/10.17632/x53tts3zfr
+## load fetal atlas highly variable genes
+fetal.hvg <- readLines("Res_fetal_atlas_highly_variable_genes.csv")
+## load fetal atlas meta.data after decompression, which contains CSS-based UMAP embedding of the fetal atlas and organ identity
+fetal.meta <- read.csv("Table_fetal_atlas_meta_data.csv")
+fetal.embeddings <- fetal.meta[,c("UMAP_X", "UMAP_Y")]
+ref.idx <- fetal.meta$Corrected_organ_group
 ## load fetal Cluster Similarity Spectrum (CSS) model
-css.model <- readRDS("~/Work/Endoderm/include_new_SI/human_endoderm_map/remove_sex_MT_ribo_genes/Res_fetal_CSS_model.rds")
+css.model <- readRDS("Res_fetal_CSS_model.rds")
 ## load fetal CSS-based UMAP model
-fetal.umap.res <- readRDS("Res_fetal_all_cell_type_CSS_based_UMAP_res.uwot")
+fetal.umap.res <- load_uwot("Res_fetal_all_cell_type_CSS_based_UMAP_res.uwot")
 
 
-# tHIO
-t.hio <- readRDS("~/Work/Endoderm/used_seurat_objects/Res_H9-tHIO.rds")
+# use tHIO as an example
+t.hio <- readRDS("Res_H9-tHIO.rds")
 ## use the fetal highly variable genes that are also detected in tHIO data to calculate similarity between tHIO cells and fetal clusters per sample
 ## because here the fetal cluster average profile is reference, and the tHIO cells are query, the obtained similarity spectrum is called reference similarity spectrum (RSS)
-fetal.hvg <- VariableFeatures(fetal)
 shared.genes <- intersect(fetal.hvg, rownames(t.hio))
 que.data <- as.matrix(t.hio@assays$RNA@data[shared.genes,])
 rss.list <- lapply(seq(length(css.model$model$profiles)), function(i){
@@ -29,18 +34,15 @@ t.hio[["rss"]] <- CreateDimReducObject(embeddings = rss.mat, key="RSS_", assay=D
 ## calculate the Euclidean distance between tHIO cells and fetal cells on the space of similarities to fetal clusters per sample, instead of on the space of expression. correlation is potentially more robust to batch variations than expression 
 ## after the distance calculation, get the 20-nearest fetal cells for each tHIO cell
 ## assign the majority of organ identity of the 20-nearest cells to be the inferred organ identity of tHIO cells 
-css <- fetal@reductions$css@cell.embeddings
+css <- css.model$sim2profiles 
 knn <- RANN::nn2(css, rss.mat, k = 20)$nn.idx
 ## map the organ identity of fetal cells to tHIO cells
-ref.idx <- fetal@meta.data$Corrected_organ_group
 nn.idx <- matrix(ref.idx[as.vector(knn)], nrow=nrow(knn))
-saveRDS(nn.idx, file="Res_20_fetal_NN_organ_id_for_each_tHIO_cell_after_organ_identity_correction.rds")
 trans.id <- apply(nn.idx, 1, function(vec){
   freq <- table(vec)
   names(which.max(freq))
 })
 t.hio@meta.data$Mapped_fetal_organ_after_correction <- trans.id
-saveRDS(t.hio, file="Res_tHIO_with_CSS_and_fetal_projection.rds")
 
 ## project tHIO cells to the CSS-based UMAP embedding of fetal atlas data and visualize the projection result
 thio.umap <- umap_transform(rss.mat, fetal.umap.res)
@@ -85,63 +87,4 @@ p.mat <- t(t(num.mat)/apply(num.mat, 2, sum))
 pdf("Plot_barplot_tHIO_fetal_organ_projection_after_correction_for_each_subtype.pdf")
 barplot(p.mat, col=organ.cols[rownames(p.mat)], border = NA, las=2)
 dev.off()
-
-
-
-## CDX2 control and KO
-cdx2 <- readRDS("~/Work/Endoderm/used_seurat_objects/Res_cdx2_ctrl_KO.rds")
-DimPlot(cdx2, reduction = "umap_css")
-rss.mat <- cdx2@reductions$rss@cell.embeddings
-knn <- RANN::nn2(css, rss.mat, k = 20)$nn.idx
-# map the organ identity of fetal cells to CDX2 control and KO in vitro HIO cells
-ref.idx <- fetal@meta.data$Corrected_organ_group
-nn.idx <- matrix(ref.idx[as.vector(knn)], nrow=nrow(knn))
-saveRDS(nn.idx, file="Res_20_fetal_NN_organ_id_for_each_CDX2-control_KO_HIO_cell_after_organ_identity_correction.rds")
-
-trans.id <- apply(nn.idx, 1, function(vec){
-  freq <- table(vec)
-  names(which.max(freq))
-})
-
-cdx2@meta.data$Mapped_fetal_endoderm_organ_group_after_correction <- trans.id
-ct.vec <- cdx2@meta.data$Major_cell_type
-condition.vec <- cdx2@meta.data$Tissue
-organ.vec <- cdx2@meta.data$Mapped_fetal_endoderm_organ_group_after_correction
-p.list <- lapply(c("Epithelial", "Mesenchymal"), function(ct){
-  mat <- sapply(c("CDX2-WT-HIO", "CDX2-KO-HIO"), function(condition){
-    sapply(c("Intestine", "Stomach", "Lung", "Esophagus", "Pancreas"), function(organ){
-      sum(ct.vec==ct & condition.vec==condition & organ.vec==organ)
-    })
-  })
-  p.mat <- t(t(mat)/apply(mat, 2, sum))
-  return(p.mat)
-})
-names(p.list) <- c("Epithelial", "Mesenchymal")
-p.mat.combined <- do.call('cbind', p.list)
-
-# plot mapped organ proportion by major cell type by condition
-pdf("Plot_barplot_cdx2_HIO_fetal_organ_projection_after_correction_for_each_major_cell_type_and_condition.pdf")
-barplot(p.mat.combined, col=organ.cols[rownames(p.mat.combined)], border = NA)
-dev.off()
-
-subtype.vec <- cdx2@meta.data$Cell_type
-DimPlot(cdx2, reduction = "umap_css", group.by = "Cell_type", label=T)
-selected.subtype <- c("Proliferative_epi", "MUC5AC+_goblet", "FABP1+_enterocyte", "MMP7+_epi", "SPP1+_epi", "MUC16+_epi")
-num.mat <- sapply(selected.subtype, function(ct){
-  sapply(c("Intestine", "Stomach", "Lung", "Esophagus", "Pancreas"), function(organ){
-    sum(subtype.vec==ct & organ.vec==organ)
-  })
-})
-p.mat <- t(t(num.mat)/apply(num.mat, 2, sum))
-# plot mapped organ proportion by each epithelial subtype
-pdf("Plot_barplot_cdx2_HIO_fetal_organ_projection_after_correction_for_each_epi_subtype.pdf")
-barplot(p.mat, col=organ.cols[rownames(p.mat)], border = NA, las=2)
-dev.off()
-saveRDS(cdx2, file="Res_CDX2_ctrl_KO.rds")
-
-# plot corrected organ identity distribution
-png("Plot_UMAP_CSS_fetal_atlas_organ_identity.png", height=2000, width=2000)
-plotFeature2(Embeddings(fetal, reduction = "umap_css"), values = fetal$Corrected_organ_group, gCols = organ.cols, cex=2)
-dev.off()
-
 
